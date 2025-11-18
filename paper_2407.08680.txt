@@ -1,0 +1,835 @@
+Generalizable Implicit Motion Modeling
+for Video Frame Interpolation
+Zujin Guo, Wei Li∗, Chen Change Loy
+S-Lab, Nanyang Technological University
+{zujin.guo, wei.l, ccloy}@ntu.edu.sg
+https://gseancdat.github.io/projects/GIMMVFI
+Abstract
+Motion modeling is critical in flow-based Video Frame Interpolation (VFI). Exist-
+ing paradigms either consider linear combinations of bidirectional flows or directly
+predict bilateral flows for given timestamps without exploring favorable motion
+priors, thus lacking the capability of effectively modeling spatiotemporal dynamics
+in real-world videos. To address this limitation, in this study, we introduce Gen-
+eralizable Implicit Motion Modeling (GIMM), a novel and effective approach to
+motion modeling for VFI. Specifically, to enable GIMM as an effective motion
+modeling paradigm, we design a motion encoding pipeline to model spatiotemporal
+motion latent from bidirectional flows extracted from pre-trained flow estimators,
+effectively representing input-specific motion priors. Then, we implicitly predict
+arbitrary-timestep optical flows within two adjacent input frames via an adaptive
+coordinate-based neural network, with spatiotemporal coordinates and motion
+latent as inputs. Our GIMM can be easily integrated with existing flow-based VFI
+works by supplying accurately modeled motion. We show that GIMM performs
+better than the current state of the art on standard VFI benchmarks.
+1 Introduction
+Video Frame Interpolation (VFI) is a fundamental task in computer vision, which involves generating
+intermediate frames between two adjacent video frames. This technique is crucial for various
+practical applications, including novel view synthesis [57, 14, 30], video generation [47], and video
+compression [52]. This task is highly challenging due to the complex motions typically found in
+real-world videos. To address this, recent research [29, 55, 42, 40, 20] has focused on flow-based
+frameworks, which have shown substantial success. Generally, these frameworks for VFI involve two
+main phases: 1) transforming the input frames based on estimated optical flows, and 2) merging and
+enhancing the warped frames to produce intermediate frames. Consequently, the accuracy of flow
+estimation is crucial for the fidelity of the synthesized frames.
+Accurately modeling flow from two distant frames is challenging due to the complexities of capturing
+subtle and dynamic movements caused by varying motion speeds, object occlusions, and lighting
+conditions. A commonly used approach in the literature combines bidirectional flows derived
+from input frames [22, 40, 45, 53, 39] (Figure 1(a)). This method assumes overlapped and linear
+motion for flow estimation, which does not accurately reflect real-world dynamics. Several studies
+[20, 29, 55, 42] directly predict bilateral flows based on intermediate discrete timestamps (Figure 1(b)).
+These approaches model the correlation between frame motions and timestamps without leveraging
+motion priors within input frames; they thus fall short of capturing complex spatial-temporal changes
+and handling occluded regions and unexpected deformations. Moreover, this discrete-time-based
+modeling paradigm is ineffective for arbitrary-time interpolation.
+∗ Corresponding author
+38th Conference on Neural Information Processing Systems (NeurIPS 2024).
+arXiv:2407.08680v5  [cs.CV]  10 Feb 2025
+
+Linear
+Combination
+Flow Estimator Frame Synthesis
+Generalizable
+Implcit
+Modeling
+Flow Estimator Frame SynthesisFlow Estimator Frame Synthesis
+0.25
+0.5
+0.75
+(a) (b) (c)
+0
+1
+Figure 1: Schematic of motion modeling paradigms in video frame interpolation. ( a) A naïve
+linear combination of bidirectional flows F0→1, F1→0 (i.e., flows between input frames) may lead to
+ambiguous and coarse motion estimation due to strong overlapped and linear assumptions. ( b) A
+time-condition-based modeling approach may predict suboptimal bilateral flows Ft→0, Ft→1 (i.e.,
+flows between estimated and input frames), capturing spatiotemporal changes for moving objects
+ineffectively. (c) Our generalizable implicit motion modeling properly represents spatiotemporal
+dynamics across videos and predict better bilateral flows via an adaptive coordinate-based neural
+network.
+In this study, we explore a more effective and generalizable implicit approach to motion modeling
+for VFI. Inspired by the success of implicit neural representations [48] in encoding complex high-
+dimensional data such as 2D images [5], 3D scenes [34], and videos [3], we propose to implicitly
+model optical flows between two adjacent video frames using coordinate-based neural networks. This
+implicit paradigm can directly take arbitrary spatiotemporal coordinates as inputs and effectively
+decode the desired space-time outputs, making it a promising framework for learning highly dynamic
+optical flows in real-world videos. However, leveraging implicit neural networks for effective motion
+modeling poses challenges. First, standard implicit neural networks typically perform per-instance
+modeling, optimizing model parameters for a single specific input. This limitation restricts their
+applicability across different input video frames. Therefore, we need to develop a more adaptive
+implicit model capable of capturing motions in any given video. Second, efficiently integrating
+spatiotemporal information within implicit neural networks is complex, especially when dealing with
+the intricate motions occurring between two video frames. This necessitates designing appropriate
+implicit neural architectures that can accurately predict and represent both the spatial and temporal
+dynamics in videos.
+To this end, we propose a novel generalizable implicit flow encoding for motion modeling in VFI,
+called Generalizable Implicit Motion Modeling (GIMM) (Figure 1(c)). Our method only assumes
+the availability of bidirectional flows (F0→1, F1→0 ) of two input frames obtained from a pre-trained
+optical flow estimator (e.g., RAFT [ 50], FlowFormer [19]). The input flows can be noisy as this
+prior will be refined to estimate the bilateral flows ( Ft→0, Ft→1) between arbitrary intermediate
+timestamps. Our method is unique in that it can represent input-specific motion priors effectively.
+For instance, it can accurately capture the complex dynamics of a somersault. This is achieved by
+introducing a motion encoding pipeline to extract spatiotemporal motion latent from the bidirectional
+flows. Our method can further enable frame interpolation at arbitrary timestamps, thanks to the
+adaptive coordinate-based neural network that takes spatiotemporal coordinates and motion latent
+as inputs. This capability allows our method to generate frames at various temporal granularities,
+providing flexibility and precision in video frame interpolation.
+Our contributions are summarized as follows: We present an effective motion modeling paradigm for
+video frame interpolation characterized by a novel generalizable implicit motion modeling framework.
+Our GIMM is capable of accurately predicting optical flow for arbitrary timesteps between two
+adjacent video frames at any resolution, allowing seamless integration with existing flow-based VFI
+methods. We demonstrate the advantages of our GIMM in motion modeling for arbitrary-timestep
+VFI tasks, achieving state-of-the-art performances on various benchmarks.
+2
+
+2 Related Work
+Video frame interpolation. Conventional VFI studies primarily rely on either direct frame synthesis
+via convolutional networks [11, 1, 24] or interpolation using dynamic kernels with learnable weights
+and offsets [37, 38, 41, 9, 8, 12, 28]. Recent approaches have shifted towards flow-based methods
+to synthesize frames at desired timesteps, where motion modeling plays a crucial role [20, 29, 54,
+26, 49, 17]. Some flow-based methods combine estimated bidirectional flows between input frames
+[22, 40, 45, 53, 39, 1], often leading to inaccurate motion predictions, especially in occluded areas.
+This simplistic combination results in ambiguous and coarse motion estimation, causing object shifts
+in interpolated frames. Several recent approaches [20, 29, 55, 20, 32] address these issues by directly
+predicting the desired motion within an end-to-end framework conditioned on timesteps, showing
+impressive results in synthesized frames. However, these methods mainly rely on discrete-time-based
+fitting of variable relationships between motion and timesteps, making it challenging to achieve
+consistent, continuous interpolation outcomes.
+Implicit neural representations. Implicit Neural Representations (INRs) have been shown effective
+in modeling complex, high-dimensional data for various applications, including video compression
+[3], novel view synthesis [34, 30], and image super-resolution [5]. Typically, INRs learn a continuous
+mapping from a set of coordinates to a specific signal using a coordinate-based neural network to
+encode data implicitly. The flexible and expressive modeling capabilities of INRs motivate us to
+explore their use to encode intricate motions and capture subtle, dynamic movements of objects in
+real-world videos. A recent work related to ours is IFE [13]. While both approaches consider implicit
+flow encoding, our method significantly differs from IFE. Unlike IFE, which focuses on per-scene
+encoding—where each coordinate-based network is parameterized by a specific video instance—we
+aim to develop a generalizable motion modeling approach that can be applied across different videos.
+Generalizable INRs. Recent works [5, 44, 10, 21, 15, 7, 4] further extend INRs for generalizable
+encoding by conditioning coordinate-based neural networks with additional instance-specific inputs.
+For example, some approaches [ 6, 27, 25] employ Transformers [51] as meta-learners to predict
+instance-specific weights or modulation features for coordinate-based neural networks at high com-
+putational costs. Several notable studies [4, 7, 45] leverage generalizable INRs for video encoding
+to facilitate video interpolation and super-resolution, mainly focusing on directly learning implicit
+space-time continuous neural representations from video. In contrast, we aim to explore effective
+motion modeling paradigms to improve intermediate frame synthesis for flow-based VFI. To our
+knowledge, we make the first attempt to utilize generalizable INRs for motion modeling in the context
+of VFI.
+3 Method
+Given a pair of adjacent video frames I0, I1 ∈ RH×W×3 with timesteps {0, 1}, a general flow-based
+video frame interpolation process is defined as follows:
+Ft = G(I0, I1, t), (1)
+It = H(Ft, I0, I1), ∀t ∈ [0, 1], (2)
+where G denotes a motion modeling (or flow estimation) module, andH indicates a frame interpolation
+process under the guidance of estimated motion Ft at a timestep of t ∈ [0, 1] for input frames I0
+and I1. In this work, we mainly focus on studying an effective motion modeling framework G for
+flow-based VFI.
+3.1 Generalizable Implicit Motion Modeling
+The goal of GIMM is to estimate bilateral flows Ft→0, Ft→1 for any timestep t ∈ [0, 1], deriving
+from initial bidirectional flows F0→1, F1→0:
+Ft→0, Ft→1 = G(F0→1, F1→0, t), ∀t ∈ [0, 1], (3)
+where F0→1, F1→0 are predicted from a pre-trained optical flow estimator (e.g., RAFT [50], Flow-
+Former [19]) with input frames I0 and I1. Figure 2 depicts the overall generalizable motion mod-
+eling framework of GIMM. Motivated by the great success of INRs in modeling complex video
+data [7, 4, 13, 34], GIMM uses an adaptive coordinate-based neural network for continuous motion
+3
+
+Motion
+Encoder
+Forward
+Warping Latent
+Refiner
+Bidirectional Flows
+MLP 
+Coordinate-based
+Network
+Motion LatentNormalized Flows Normalized Flow
+Bilateral Flows
+3D Coordinates
+Figure 2: Our GIMM first transforms initial bidirectional flows F0→1, F1→0 as normalized flows
+V0, V1. The motion encoder extracts motion features K0, K1 from V0, V1, respectively. K0, K1 are
+then forward warped at a given timestep t using bidirectional flows to obtain the warped features
+Kt→0, Kt→1. We pass the warped and initial motion features into a Latent Refiner that outputs
+motion latent Lt, representing motion information att. Conditioned on Lt(x, y), the coordinate-based
+network gθ predicts the corresponding normalized flow Vt with 3D coordinates x = (x, y, t). For
+interpolation usage, Vt is then transferred into bilateral flows Ft→0, Ft→1 through denormalization.
+modeling. Unlike the existing IFE [13] that performs per-scene optimization and requires test-time
+learning for different videos, our GIMM takes additional instance-specific motion latent inputs Lt to
+enhance model generalizability across various input videos.
+Flow normalization. Following IFE [13], we perform normalization for the initial bidirectional
+flows as follows:
+V0 = ϕ(F0→1), V1 = ϕ(−F1→0), (4)
+Vt = ϕ(Ft→1 − Ft→0), (5)
+where ϕ is a scale operator. This reversible normalization process aligns the scale and temporal
+direction of input bidirectional flows F0→1, F1→0 with output bilateral flows Ft→0, Ft→1, allowing
+the normalized flows Vi ∈ [0, 1]H×W×2, i∈ 0, 1 to be effectively encoded in subsequent implicit
+motion modeling in GIMM.
+Motion latent. To achieve generalizable implicit modeling of motion dynamics, we learn implicit
+neural representations for motions with conditions on instance-specific motion latent inputs Lt(x, y),
+which provides instance-specific motion priors at spatiotemporal coordinates x = (x, y, t) for target
+motion Vt(x, y). Specifically, we introduce a Motion Encoder to extract motion features Ki from
+normalized flows Vi. To maintain spatiotemporal consistencies of modeled motion, we derive time-
+dependent motion features Kt for given timestep t from both motion features K0 and K1. To realize
+this, we apply forward warping − →ω process to map every location of motion features Ki to the target
+timestep t:
+Ki→t = − →ω (Ki, Fi→t, Zi). (6)
+Here, Ki→t are warped features with timesteps i ∈ {0, 1} that integrate the correspondences from
+source (input) timesteps to the target timestep, Zi represents splatting weights, and Fi→t denotes
+scaled bidirectional flows at timestep t. We compute scaled bidirectional flows Fi→t as follows:
+Fi→t =
+(t − 0) · F0→1, if i = 0
+(1 − t) · F1→0, if i = 1 (7)
+To mitigate warping errors in multi-to-one cases or occluded regions, we calculate splatting weights
+Zi using flow consistency Ui
+flow and variance Ui
+var metrics [35, 36] as follows:
+Zi = 1
+1 +αflow · Ui
+flow
++ 1
+1 +αvar · Uivar
+, (8)
+where αflow and αvar are learnable parameters. To obtain the final motion latent Lt, we concatenate
+the warped features Concat(K0→t, K1→t) as the coarse motion latent at timestep t and further refine
+via a Latent Refiner module to deal with potential information loss and ambiguous motion in the
+forward warping process. Both the Latent Refiner and the Motion Encoder mentioned above are
+structured as shallow convolutional networks. We provide their network configurations and detailed
+calculations for two flow metrics Ui
+flow and Ui
+var in the supplementary.
+4
+
+Pretrained
+Flow
+Estimator
+Generalizable Implicit
+Motion Modeling
+Frame
+Synthesis
+Module
+Figure 3: An overview of GIMM-VFI architecture. GIMM-VFI employs a pre-trained flow estimator,
+E, to predict bidirectional flows (F0→1, F1→0) and extracts context features A as well as correlation
+features C from the input frames (I0, I1). Given the timestep t, a generalizable implicit motion
+modeling (GIMM) module G (detailed in Figure 2) takes the bidirectional flows as inputs and predicts
+bilateral flows (Ft→0, Ft→1), which are then passed into a frame synthesis module S, together with
+extracted features (A, C), to synthesize the target frame It.
+Implicit motion prediction. To realize INRs for generalizable motion modeling, we devise an
+adaptive coordinate-based network gθ for implicit and continuous motion encoding, which maps
+spatiotemporal coordinates x ∈ [−1, 1]H×W×3 along with the corresponding D-dimension motion
+latent code Lt ∈ RH×W×D to predicted normalized flows ˆVt:
+ˆVt = gθ(x, Lt). (9)
+The predicted normalized flow Vt can be converted into predicted bilateral flows Ft→0, Ft→1 via the
+reverse flow normalization process for VFI. See the supplementary for the details of the coordinate-
+based network.
+Optimization. In practice, we optimize the GIMM module by minimizing a Mean-Square-Error
+(MSE) loss between predicted ( ˆVt) and ground-truth (Vt) normalized optical flows:
+Lgimm(Vt, ˆVt) = 1
+H × W
+H−1X
+k=0
+W−1X
+l=0
+||Vt(k, l) − ˆVt(k, l)||2. (10)
+3.2 Integrating GIMM with Frame Interpolation
+GIMM-VFI. Given two adjacent video frames Ii with i ∈ {0, 1}, we start with a pre-trained optical
+flow estimator (e.g., RAFT [50], FlowFormer [19]) to extract context features Ai, correlation features
+Ci, and initial bidirectional flows F0→1 and F1→0. We first predict bilateral flows Ft→i for a given
+timestep t from initial bidirectional flows using a pre-trained GIMM module. The predicted bilateral
+flows Ft→i, context features Ai, and correlation features Ci are then passed into a frame synthesis
+module S (adapted from the AMT [29]), which refines the input flows and generates warping masks
+Mt ∈ [0, 1]H×W . Following previous flow-based VFI studies [ 29, 55, 42, 20], we obtain warped
+images It→i via backward warping ← −ω under the guidance of predicted bilateral flows Ft→i from
+input frames I0 and I1:
+It→i = ← −ω (Ii, Ft→i), (11)
+It→i(x, y) =Ii(x + Fh
+t→i(x, y), y+ Fv
+t→i(x, y)), (12)
+where Fh
+t→i, Fv
+t→i represents horizontal and vertical motion of Ft→i, respectively. To generate the
+final interpolated image ˆIt, the warped images It→0, It→1 are fused with the warping mask Mt as
+follows:
+ˆIt = Mt · It→0 + (1− Mt) · It→1. (13)
+See the supplementary for the details of the frame synthesis module.
+Overall objectives. We use the following objective function for VFI:
+Linterp(It, ˆIt) =Llap(It, ˆIt) +Lchar(It, ˆIt) +Lcensus(It, ˆIt), (14)
+where Llap, Lchar, and Lcensus denote the Laplacian loss [55, 36], Charbonnier loss [29, 2] , and
+census loss [29, 33], respectively. In addition, to preserve the motion modeling in the pre-trained
+5
+
+Table 1: Comparisons of different motion modeling methods. We assess the modeled motion on
+Vimeo-Triplet-Flow (VTF) and Vimeo-Septuplet-Flow (VSF) by employing PSNR and EPE metrics.
+Additionally, we demonstrate their impact on the interpolation task by presenting the PSNR values of
+their interpolation results on the ‘hard’ split of the SNU-FILM-arb dataset. We denote the calculated
+PSNR values as PSNRf for optical flows in the motion assessment and PSNRi for interpolated images
+in the interpolation task.
+Motion method Vimeo-Triplet-Flow (VTF) Vimeo-Septuplet-Flow (VSF) SNU-FILM-arb-Hard
+PSNRf↑ EPE↓ PSNRf↑ EPE↓ PSNRi↑
+Linear 35.03 0.44 30.09 2.87 32.42
+Forward Warp 32.80 0.47 28.22 3.38 32.31
+End-to-End 29.23 1.02 25.99 5.12 32.28
+BMBC [39] 28.89 0.95 23.19 8.23 28.51
+GIMM (-VFI-R) 37.56 0.34 30.45 2.68 32.62
+GIMM module, we reconstruct and supervise the flows ˆV0, ˆV1 with pseudo ground truth V0, V1. This
+objective Lrec is defined as ||V0 − ˆV0||2 + ||V1 − ˆV1||2. The overall objective L is as follows:
+L = Linterp(It, ˆIt) +λrecLrec, (15)
+where λrec is the hyperparameter. We optimize the entire GIMM-VFI model that contains the
+pre-trained flow estimator, pre-trained GIMM module, and frame synthesis module.
+4 Experiments
+We present quantitative and qualitative evaluations of our motion modeling method GIMM in
+Section 4.1, and the corresponding interpolation method (GIMM-VFI) in Section 4.4. Specifically,
+we evaluate both motion quality and performance on the downstream interpolation task. We compare
+GIMM-VFI with current state-of-the-art VFI methods on arbitrary-timestep interpolation.
+Implementation details. We train the GIMM model on the training split of Vimeo90K [54] triplets
+dataset using optical flows extracted by off-the-shelf flow estimators. Our GIMM-VFI is trained on the
+complete Vimeo90K septuplet dataset. Specifically, we implement two variants of GIMM-VFI, using
+two different flow estimators: the RAFT [50] and FlowFormer [19], designated as GIMM-VFI-R and
+GIMM-VFI-F, respectively. More details are provided in the supplementary materials.
+4.1 Motion Modeling
+VTF and VSF benchmarks. To assess the modeled motion quality with GIMM, we use Flow-
+former [19] to produce pseudo ground truth motion. Specifically, we establish two motion evaluation
+benchmarks: Vimeo-Triplet-Flow (VTF) and Vimeo-Septuplet-Flow (VSF). These benchmarks are
+derived from the triplet and septuplet splits of the Vimeo90K [54] test set, tailored for evaluating 2X
+and 6X motion modeling, respectively.
+Baselines. We compare GIMM with other motion modeling approaches, including Linear, Forward
+Warp, End-to-End, and BMBC [39]. Specifically, Linear replaces our GIMM module with the linear
+approximation strategy [22]. Similarly, Forward Warpsubstitutes GIMM with a forward warping
+strategy [35]. Meanwhile, the End-to-End denotes the strategy that directly predicts motion at
+arbitrary timesteps through an end-to-end fitting. In this end-to-end setting, we select the current state-
+of-the-art EMA-VFI [55] as the representative method. Additionally, we make further comparisons
+with BMBC [39], which is supposed to model complex motion effectively through several stages of
+motion predictions and motion refinements. For fair comparisons, we employ RAFT [50] as the flow
+estimator for different motion modeling methods.
+Evaluation settings. We measure the modeled motion quality on both VTF and VSF benchmarks
+by calculating PSNR on normalized flows and End-Point-Error (EPE) on the unscaled flows. For
+the downstream interpolation task, we calculate PSNR on the ‘hard’ split of the SNU-FILM-arb
+benchmark (SNU-FILM-arb-Hard). Details about SNU-FILM-arb are presented in Section 4.4.
+6
+
+Overlaid Input Forward Warp
+ BMBC Ground TruthGIMM-VFI-REnd-to-EndLinear
+Figure 4: Qualitative comparisons of different motion modeling methods on SNU-FILM-arb-Hard.
+All the results are predicted at t = 0.75, and ground truth flows are obtained by FlowFormer [19].
+Results. We provide quantitative comparisons of our GIMM and baselines in Table 1. We first report
+the results of motion quality on VTF and VSF. We find that GIMM can continuously model motions
+in videos. GIMM predicts the best flows on both the VTF benchmark (37.56dB PSNR/ 0.34 EPE)
+and the VSF benchmark (30.45dB PSNR/ 2.68 EPE) that involves unseen timesteps during training.
+Moreover, our study highlights the importance of motion priors in both motion modeling and the
+downstream interpolation task. The Linear, Forward Warp, and our GIMM methods that leverage
+motion priors from RAFT [50] can provide better motion and interpolation performances than the
+End-to-End and BMBC [ 39] across all benchmarks. Notably, GIMM benefits the interpolation
+task the most and achieves the highest PSNR of 32.62 dB on SNU-FILM-arb-Hard. While motion
+modeling plays a critical role in interpolation, other modules also impact interpolation outcomes.
+The End-to-End method has a narrower performance gap with other advanced motion modeling
+approaches on the interpolation benchmark than on motion modeling benchmarks, likely due to its
+more complex and extensive feature extraction and frame synthesis modules.
+Visualizations. Besides the quantitative evaluation of motion modeling, we also qualitatively
+evaluate them on SNU-FILM-arb-Hard, as shown in Figure 4. Since SNU-FILM-arb-Hard requires
+8X interpolation for input frames of large motion, classical methods like BMBC [39] may struggle to
+model the intermediate motion. In contrast, we observe the capacity of GIMM for accurate motion
+modeling at arbitrary timesteps. Take the Somersault in Figure 4 for example, the ankle flow and
+the corresponding interpolation generated by GIMM have the best consistency with the ground
+truth, pointing to the same direction. Moreover, GIMM is capable of reducing ambiguities when
+interpolating moving objects. We can observe clearer silhouettes with fewer blurs in both the ‘dog-leg’
+and ‘dog-head’ cases in Figure 4.
+4.2 Ablation Study on Motion Model Choices
+As our core contribution, we present an effective motion modeling paradigm for video frame interpo-
+lation, characterized by a novel generalizable implicit motion modeling framework (GIMM). In this
+section, we further investigate the necessity of implicit neural representations (INRs) and approaches
+7
+
+Table 2: Quantitative comparisons of different motion model choices.
+Model Variants Vimeo-Triplet-Flow (VTF) Vimeo-Septuplet-Flow (VSF) Param.(M)
+PSNR↑ EPE↓ PSNR↑ EPE↓
+Meta-learning (INR) 30.19 0.88 24.50 6.80 43.92
+GIMM (U-Net) 36.96 0.39 29.96 2.90 4.27
+GIMM (INR) 37.56 0.34 30.45 2.68 0.25
+to generalizable INRs. The experiments are conducted on the motion modeling benchmarks, i.e.,
+Vimeo-Triplet-Flow (VTF) and Vimeo-Septuplet-Flow (VSF).
+Necessity of INRs. A straightforward replacement of INRs in our GIMM is a timestep-conditioned
+U-Net as in diffusion literature [43]. We substitute the INRs with a U-Net of a comparable number
+of channels to ensure fair comparisons. In Table 2, replacing INR with U-Net results in worse
+performance, especially on the 6X motion modeling benchmark VSF. This demonstrates the strong
+continuous modeling ability of INR. Besides, GIMM with INR has a much lighter architecture,
+improving efficiency. Therefore, it is necessary and proper to use INR for our motion modeling.
+Approaches to generalizable INRs. To realize generalizable implicit modeling, an alternative
+way is to modulate the weights of INRs with meta-learners [ 6, 25]. Following [ 25], we employ
+Transformers [51] as the meta-learner. Compared to GIMM, this meta-learning approach performs
+significantly worse across all benchmarks while introducing a model with over 170X more parameters.
+4.3 Ablation Study on GIMM
+In this section, we investigate the effectiveness of model designs in GIMM in Table 3. The experiments
+are conducted on the VTF and VSF benchmarks.
+Forward warping. We substitute forward warping operation in GIMM with a straightforward
+linear combination of the input motion features (Non-Fwarp). In Table 3, we observe a significant
+performance drop with this modification. For example, the EPE on VSF increases by 0.20. This
+result highlights the importance of forward warping for GIMM’s continuous motion modeling.
+Implicit modeling. In GIMM, the motion can be modeled even without the presence of implicit
+modeling. We conduct experiments without using any coordinates (Non-Imp). In Table 3, this variant
+yields performance gains, with reductions of 0.05 and 0.13 in the EPEs on VTF and VSF respectively,
+highlighting the importance of implicit modeling in GIMM.
+Motion encoder. We leverage the motion encoder in our GIMM to extract features from flows,
+alleviating the negative impacts brought by the possible bias and noises in the estimated flows. To
+justify this design, we remove the motion encoder for a direct comparison (Non-ME). As a result,
+we observe increases in error on both benchmarks, e.g., the EPE on VSF rises 0.17. Therefore, the
+motion encoder benefits the motion modeling in GIMM.
+Latent refinement. To validate the efficacy of latent refinement in GIMM, we conducted experiments
+excluding the latent refiner (Non-Refiner). This leads to notable declines of 0.53 dB and 0.43 dB in
+PSNRs across both benchmarks. Thus, refining the motion latent proves essential for accurate motion
+modeling.
+Spatial coordinates. Since the modeled motion consists of spatiotemporal changes, we use 3D
+spatiotemporal coordinates in the implicit modeling of GIMM. To assess the necessity of spatial
+coordinates, we replace 3D coordinates with temporal coordinates (T-coord only). This removal causes
+a 0.16 dB drop of PSNR on Vimeo-Triplet-Flow and a 0.06 increase of EPE on Vimeo-Septuplet-Flow.
+This emphasizes the crucial role of spatial coordinates in implicit modeling.
+4.4 Arbitrary-timestep Video Frame Interpolation
+SNU-FILM-arb benchmark. We introduce the SNU-FILM-arb benchmark for a more generalized
+evaluation, to facilitate research on the arbitrary-timestep frame interpolation task. Specifically, we
+incorporate the SNU-FILM dataset [11] that encompasses 310 clips from 31 videos captured at 240
+fps, with heights ranging from 384 to 1280 pixels and widths from 368 to 720 pixels. Different from
+8
+
+Table 3: Quantitative comparisons of different model variants.For each model variant, we evaluate
+its motion modeling performance on Vimeo-Triplet-Flow and Vimeo-Septuplet-Flow, respectively.
+We adopt EPE and PSNR as the metrics for motion quality.
+Model Variants Vimeo-Triplet-Flow (VTF) Vimeo-Septuplet-Flow (VSF)
+PSNR↑ EPE↓ PSNR↑ EPE↓
+Non-Fwarp 37.07 0.37 30.09 2.88
+Non-Imp 37.04 0.39 30.11 2.81
+Non-ME 37.05 0.42 30.26 2.85
+Non-Refiner 37.03 0.37 30.02 2.77
+T-coord only 37.40 0.36 30.39 2.74
+Full 37.56 0.34 30.45 2.68
+Table 4: Quantitative results for arbitrary-timestep interpolation. We report the quantitative
+metrics reported as PSNR↑/LPIPS↓/FID↓, with the best results highlighted inboldface and the second
+best results in underline. The analysis categorizes methods into two groups: non-INR methods (first
+half) and INR-based methods (second half). We employ a ‘-’ symbol to denote ‘out-of-memory’
+scenarios, and a dagger (‘†’) to indicate that the results are drawn from prior studies [20, 18, 55].
+Method XTest SNU-FILM-arb
+2K 4K Medium (4X) Hard (8X) Extreme (16X)
+RIFE [20] 31.43† / 0.126 / 11.99 30.58† / 0.152 / 13.52 36.33 / 0.038 / 6.65 31.87 / 0.072 / 11.99 27.21 / 0.134 / 19.82M2M [18] 32.13† / 0.098/ 9.25 30.88† / 0.158 / 8.67 36.56 / 0.036 / 5.98 31.92 / 0.061 / 10.13 27.14 / 0.112 / 17.37IFRNet [26] 31.53† / 0.108 / 23.93 30.46† / 0.164 / 23.75 34.88 / 0.046 / 9.92 31.15 / 0.066 / 11.65 26.32 / 0.115 / 16.91AMT [29] 28.88 / 0.153 / 13.92 28.17 / 0.187 / 13.97 34.49 / 0.072 / 9.25 31.03 / 0.089 / 10.34 26.44 / 0.136 / 14.72UPR-Net [23] 31.16 / 0.104 / 10.75 30.50 / 0.154 / 9.45 36.78 / 0.033/ 6.09 31.96 / 0.064 / 9.9327.14 / 0.111 / 16.76EMA-VFI [55] 32.53 /0.097/ 7.21 31.21 / 0.156 / 8.61 36.65 / 0.041 / 7.07 32.28 / 0.074 / 12.17 27.72 / 0.130 / 19.58
+CURE [45] 30.24 / 0.111 / 26.42 - 36.09 / 0.035 / 6.98 31.32 / 0.063 / 12.72 26.61 / 0.114 / 22.62GIMM-VFI-R 32.71/ 0.113 /6.52 31.88/ 0.149/6.49 37.02/ 0.033/ 5.89 32.62/ 0.060/9.59 27.99/ 0.110/16.45GIMM-VFI-F32.91/ 0.103 / 6.7431.97/0.142/ 6.58 37.03/0.031/5.86 32.56/0.059/ 9.95 28.01/0.109/ 16.79
+its original setting of 2X interpolation, we conduct 4X, 8X, and 16X interpolation evaluations on the
+original ‘Medium’, ‘Hard’, and ‘Extreme’ subsets of SNU-FILM, respectively.
+Evaluation settings. We calculate PSNR and perceptual indicators, e.g., LPIPS [56], FID [16], on
+both SNU-FILM-arb and X4K-1000FPS (XTest) [46]. XTest comprises 15 clips from 15 videos for 8X
+interpolation. Following the established protocol from prior studies [18, 55], we assess interpolation
+quality at both 2K and 4K resolutions. For fair comparisons, we disable test-time augmentations
+during evaluations. We also provide additional evaluations of our method for perception-oriented
+interpolation in the supplementary materials.
+Current advanced VFI methods. We compare GIMM-VFI with various advanced interpolation
+methods. For non-INR methods, we include RIFE [20], IFRNet [26], M2M [18], AMT [29], UPR-
+Net [23], and EMA-VFI [55]. We also make comparisons with the INR-based method CURE [45].
+Results. We present the quantitative results of GIMM-VFI on arbitrary-timestep interpolation
+benchmarks in Table 4. Our proposed method achieves high-quality continuous interpolation across
+various timesteps (i.e., 4X, 8X, 16X). In terms of PSNR, we observe that our RAFT-based [ 50]
+method GIMM-VFI-R achieves significant improvements of 0.18 dB on XTest-2K, 0.67 dB on
+XTest-4K, and approximately 0.30 dB on each subset of the SNU-FILM-arb, in comparison with the
+previous state-of-the-art method EMA-VFI [55]. For perceptual metrics, i.e., LPIPS and FID, our
+proposed GIMM-VFI still outperforms previous methods on most benchmarks, delivering competitive
+performance. These observations demonstrate that our GIMM can offer effective motion modeling
+for the arbitrary-timestep VFI task.
+Visualizations. Besides the quantitative evaluations, we further qualitatively compare both GIMM-
+VFI-R and GIMM-VFI-F with existing VFI techniques, as illustrated in Figure 5. Our methods
+achieve better interpolation across various timesteps. For example, our methods maintain the integrity
+of moving object silhouettes ( 3rd case). Moreover, GIMM-VFI-R and GIMM-VFI-F preserve
+detailed textures within both occluded regions and moving objects from significant deformations,
+e.g., the rectangle pole tag(1st case), truck (2nd case), swing (3rd case).
+9
+
+timestep
+Overlaid Input CURE EMA-VFI GIMM-VFI-RGIMM-VFI-FGround Truth
+0.25
+0.75
+0.25
+0.75
+0.25
+0.75
+0.25
+0.75
+Figure 5: Qualitative comparisons of arbitrary-timestep interpolation on XTest-2K [46]. Positions
+pointed by the yellow arrow indicate the distinct performance of our method.
+5 Limitation
+There are several known limitations to our method. First of all, the GIMM-VFI is closely related
+to the pre-trained flow estimator, which estimates bidirectional flows and extracts image features.
+Therefore, GIMM-VFI inherits the limitations of the chosen pre-trained flow estimators, which may
+include high computational costs. Additionally, GIMM-VFI only accepts two consecutive frames as
+inputs, which is not favorable for frame interpolations where larger and nonlinear motion exists.
+6 Conclusion
+We propose a novel motion modeling method, GIMM, which performs continuous motion modeling
+for video frame interpolation. Our proposed GIMM is the first attempt to learn generalizable implicit
+neural representations for continuous motion modeling. The method can properly predict arbitrary-
+timestep optical flows within two adjacent video frames at any resolution, and be easily integrated
+with existing flow-based VFI approaches (e.g., AMT [29]) without further modifications by supplying
+accurately modeled motion. Extensive experiments on the VFI benchmarks show that our GIMM can
+effectively perform generalizable motion modeling across videos.
+Acknowledgement. This study is supported under the RIE2020 Industry Alignment Fund – Industry
+Collaboration Projects (IAF-ICP) Funding Initiative, as well as cash and in-kind contributions from
+the industry partner(s).
+10
+
+References
+[1] Wenbo Bao, Wei-Sheng Lai, Chao Ma, Xiaoyun Zhang, Zhiyong Gao, and Ming-Hsuan Yang.
+Depth-aware video frame interpolation. In CVPR, 2019.
+[2] Pierre Charbonnier, Laure Blanc-Feraud, Gilles Aubert, and Michel Barlaud. Two deterministic
+half-quadratic regularization algorithms for computed imaging. In ICIP, 1994.
+[3] Hao Chen, Bo He, Hanyu Wang, Yixuan Ren, Ser Nam Lim, and Abhinav Shrivastava. NeRV:
+Neural representations for videos. In NeurIPS, 2021.
+[4] Yi-Hsin Chen, Si-Cun Chen, Yen-Yu Lin, and Wen-Hsiao Peng. MoTIF: Learning motion
+trajectories with local implicit neural functions for continuous space-time video super-resolution.
+In ICCV, 2023.
+[5] Yinbo Chen, Sifei Liu, and Xiaolong Wang. Learning continuous image representation with
+local implicit image function. In CVPR, 2021.
+[6] Yinbo Chen and Xiaolong Wang. Transformers as meta-learners for implicit neural representa-
+tions. In ECCV, 2022.
+[7] Zeyuan Chen, Yinbo Chen, Jingwen Liu, Xingqian Xu, Vidit Goel, Zhangyang Wang, Humphrey
+Shi, and Xiaolong Wang. VideoINR: Learning video implicit neural representation for continu-
+ous space-time super-resolution. In CVPR, 2022.
+[8] Xianhang Cheng and Zhenzhong Chen. Video frame interpolation via deformable separable
+convolution. In AAAI, 2020.
+[9] Xianhang Cheng and Zhenzhong Chen. Multiple video frame interpolation via enhanced
+deformable separable convolution. IEEE TPAMI, 2021.
+[10] Julian Chibane, Thiemo Alldieck, and Gerard Pons-Moll. Implicit functions in feature space for
+3d shape reconstruction and completion. In CVPR, 2020.
+[11] Myungsub Choi, Heewon Kim, Bohyung Han, Ning Xu, and Kyoung Mu Lee. Channel attention
+is all you need for video frame interpolation. In AAAI, 2020.
+[12] Tianyu Ding, Luming Liang, Zhihui Zhu, and Ilya Zharkov. CDFI: Compression-driven network
+design for frame interpolation. In CVPR, 2021.
+[13] Pedro Figueirêdo, Avinash Paliwal, and Nima Khademi Kalantari. Frame interpolation for
+dynamic scenes with implicit flow encoding. In WACV, 2023.
+[14] John Flynn, Ivan Neulander, James Philbin, and Noah Snavely. DeepStereo: Learning to predict
+new views from the world’s imagery. In CVPR, 2016.
+[15] Kyle Genova, Forrester Cole, Avneesh Sud, Aaron Sarna, and Thomas Funkhouser. Local deep
+implicit functions for 3d shape. In CVPR, 2020.
+[16] Martin Heusel, Hubert Ramsauer, Thomas Unterthiner, Bernhard Nessler, and Sepp Hochreiter.
+Gans trained by a two time-scale update rule converge to a local nash equilibrium. In NeurIPS,
+2017.
+[17] Xinyu Hou, Liming Jiang, Rui Shao, and Chen Change Loy. Video infilling with rich motion
+prior. In BMVC, 2023.
+[18] Ping Hu, Simon Niklaus, Stan Sclaroff, and Kate Saenko. Many-to-many splatting for efficient
+video frame interpolation. In CVPR, 2022.
+[19] Zhaoyang Huang, Xiaoyu Shi, Chao Zhang, Qiang Wang, Ka Chun Cheung, Hongwei Qin,
+Jifeng Dai, and Hongsheng Li. FlowFormer: A transformer architecture for optical flow. In
+ECCV, 2022.
+[20] Zhewei Huang, Tianyuan Zhang, Wen Heng, Boxin Shi, and Shuchang Zhou. Real-time
+intermediate flow estimation for video frame interpolation. In ECCV, 2022.
+11
+
+[21] Chiyu Jiang, Avneesh Sud, Ameesh Makadia, Jingwei Huang, Matthias Nießner, and Thomas
+Funkhouser. Local implicit grid representations for 3d scenes. In CVPR, 2020.
+[22] Huaizu Jiang, Deqing Sun, Varun Jampani, Ming-Hsuan Yang, Erik Learned-Miller, and Jan
+Kautz. Super SloMo: High quality estimation of multiple intermediate frames for video
+interpolation. In CVPR, 2018.
+[23] Xin Jin, Longhai Wu, Jie Chen, Youxin Chen, Jayoon Koo, and Cheul-Hee Hahm. A unified
+pyramid recurrent network for video frame interpolation. In CVPR, 2023.
+[24] Tarun Kalluri, Deepak Pathak, Manmohan Chandraker, and Du Tran. FLA VR: Flow-agnostic
+video representations for fast frame interpolation. In WACV, 2023.
+[25] Chiheon Kim, Doyup Lee, Saehoon Kim, Minsu Cho, and Wook-Shin Han. Generalizable
+implicit neural representations via instance pattern composers. In CVPR, 2023.
+[26] Lingtong Kong, Boyuan Jiang, Donghao Luo, Wenqing Chu, Xiaoming Huang, Ying Tai,
+Chengjie Wang, and Jie Yang. IFRNet: Intermediate feature refine network for efficient frame
+interpolation. In CVPR, 2022.
+[27] Doyup Lee, Chiheon Kim, Minsu Cho, and Wook-Shin Han. Locality-aware generalizable
+implicit neural representation. In NeurIPS, 2023.
+[28] Hyeongmin Lee, Taeoh Kim, Tae-Young Chung, Daehyun Pak, Yuseok Ban, and Sangyoun Lee.
+AdaCoF: Adaptive collaboration of flows for video frame interpolation. In CVPR, 2020.
+[29] Zhen Li, Zuo-Liang Zhu, Ling-Hao Han, Qibin Hou, Chun-Le Guo, and Ming-Ming Cheng.
+AMT: All-pairs multi-field transforms for efficient frame interpolation. In CVPR, 2023.
+[30] Zhengqi Li, Simon Niklaus, Noah Snavely, and Oliver Wang. Neural scene flow fields for
+space-time view synthesis of dynamic scenes. In CVPR, 2021.
+[31] Chengxu Liu, Huan Yang, Jianlong Fu, and Xueming Qian. TTVFI: Learning trajectory-aware
+transformer for video frame interpolation. IEEE TIP, 2023.
+[32] Liying Lu, Ruizheng Wu, Huaijia Lin, Jiangbo Lu, and Jiaya Jia. Video frame interpolation
+with transformer. In CVPR, 2022.
+[33] Simon Meister, Junhwa Hur, and Stefan Roth. UnFlow: Unsupervised learning of optical flow
+with a bidirectional census loss. In AAAI, 2018.
+[34] Ben Mildenhall, Pratul P. Srinivasan, Matthew Tancik, Jonathan T. Barron, Ravi Ramamoorthi,
+and Ren Ng. NeRF: Representing scenes as neural radiance fields for view synthesis. In ECCV,
+2020.
+[35] Simon Niklaus, Ping Hu, and Jiawen Chen. Splatting-based synthesis for video frame interpola-
+tion. In WACV, 2023.
+[36] Simon Niklaus and Feng Liu. Softmax splatting for video frame interpolation. In CVPR, 2020.
+[37] Simon Niklaus, Long Mai, and Feng Liu. Video frame interpolation via adaptive convolution.
+In CVPR, 2017.
+[38] Simon Niklaus, Long Mai, and Feng Liu. Video frame interpolation via adaptive separable
+convolution. In ICCV, 2017.
+[39] Junheum Park, Keunsoo Ko, Chul Lee, and Chang-Su Kim. BMBC: Bilateral motion estimation
+with bilateral cost volume for video interpolation. In ECCV, 2020.
+[40] Junheum Park, Chul Lee, and Chang-Su Kim. Asymmetric bilateral motion estimation for video
+frame interpolation. In ICCV, 2021.
+[41] Tomer Peleg, Pablo Szekely, Doron Sabo, and Omry Sendik. Im-net for high resolution video
+frame interpolation. In CVPR, 2019.
+12
+
+[42] Fitsum Reda, Janne Kontkanen, Eric Tabellion, Deqing Sun, Caroline Pantofaru, and Brian
+Curless. FILM: Frame interpolation for large motion. In ECCV, 2022.
+[43] Robin Rombach, Andreas Blattmann, Dominik Lorenz, Patrick Esser, and Björn Ommer.
+High-resolution image synthesis with latent diffusion models. In CVPR, 2022.
+[44] Shunsuke Saito, Zeng Huang, Ryota Natsume, Shigeo Morishima, Angjoo Kanazawa, and Hao
+Li. PIFu: Pixel-aligned implicit function for high-resolution clothed human digitization. In
+ICCV, 2019.
+[45] Wentao Shangguan, Yu Sun, Weijie Gan, and Ulugbek S Kamilov. Learning cross-video neural
+representations for high-quality frame interpolation. In ECCV, 2022.
+[46] Hyeonjun Sim, Jihyong Oh, and Munchurl Kim. XVFI: extreme video frame interpolation. In
+ICCV, 2021.
+[47] Uriel Singer, Adam Polyak, Thomas Hayes, Xi Yin, Jie An, Songyang Zhang, Qiyuan Hu, Harry
+Yang, Oron Ashual, Oran Gafni, Devi Parikh, Sonal Gupta, and Yaniv Taigman. Make-A-Video:
+Text-to-video generation without text-video data. arXiv preprint arXiv:2209.14792, 2022.
+[48] Vincent Sitzmann, Julien Martel, Alexander Bergman, David Lindell, and Gordon Wetzstein.
+Implicit neural representations with periodic activation functions. In NeurIPS, 2020.
+[49] Li Siyao, Shiyu Zhao, Weijiang Yu, Wenxiu Sun, Dimitris Metaxas, Chen Change Loy, and
+Ziwei Liu. Deep animation video interpolation in the wild. In CVPR, 2021.
+[50] Zachary Teed and Jia Deng. RAFT: Recurrent all-pairs field transforms for optical flow. In
+ECCV, 2020.
+[51] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N Gomez,
+Łukasz Kaiser, and Illia Polosukhin. Attention is all you need. In NeurIPS, 2017.
+[52] Chao-Yuan Wu, Nayan Singhal, and Philipp Krahenbuhl. Video compression through image
+interpolation. In ECCV, 2018.
+[53] Xiangyu Xu, Li Siyao, Wenxiu Sun, Qian Yin, and Ming-Hsuan Yang. Quadratic video
+interpolation. In NeurIPS, 2019.
+[54] Tianfan Xue, Baian Chen, Jiajun Wu, Donglai Wei, and William T Freeman. Video enhancement
+with task-oriented flow. IJCV, 2019.
+[55] Guozhen Zhang, Yuhan Zhu, Haonan Wang, Youxin Chen, Gangshan Wu, and Limin Wang. Ex-
+tracting motion and appearance via inter-frame attention for efficient video frame interpolation.
+In CVPR, 2023.
+[56] Richard Zhang, Phillip Isola, Alexei A Efros, Eli Shechtman, and Oliver Wang. The unreason-
+able effectiveness of deep features as a perceptual metric. In CVPR, 2018.
+[57] Tinghui Zhou, Shubham Tulsiani, Weilun Sun, Jitendra Malik, and Alexei A Efros. View
+synthesis by appearance flow. In ECCV, 2016.
+13
+
+7 Appendix
+In this supplementary material, we first provide details of our method in Section 7.1, including
+descriptions of flow metrics and reverse flow normalization. Besides, we present the network
+architectures of both the GIMM module and frame synthesis module in Section 7.2. Moreover, we
+provide details of our implementation and the corresponding training hyperparameters in Section 7.3
+and Section 7.4 respectively. We show qualitative results of motion modeled by GIMM and its model
+variants in Section 7.5. Furthermore, we present integrations with other flow-based VFI methods in
+Section 7.6. We also provide an enhanced version of our method for perception-oriented interpolation
+in Section 7.7, highlighting the great potential of GIMM. Finally, we discuss the potential broader
+impacts in Section 7.8.
+7.1 Method Details
+Flow metrics. Following Splatting-based Synthesis [35], the implementation of the forward warping
+operation within our GIMM module leverages flow metrics to enhance its accuracy. More precisely,
+we employ flow consistency Ui
+flow , and flow variance Ui
+var. For illustrative purposes, taking F0→1
+as a representative example, we compute its associated metrics as follows:
+U0
+flow = ||F0→1 + ← −ω (F1→0, F0→1)||1, (16)
+U0
+var = ||
+p
+G((F0→1)2) − G(F0→1)2||, (17)
+where ← −ω is the backward warping operator, and G(·) denotes a 3 × 3 Gaussian filter.
+Reverse flow normalization. In GIMM-VFI, we employ reverse flow normalization to convert the
+predicted normalized flow, Vt, into bilateral flows for interpolation purposes. This transformation is
+expressed through the following equations:
+Ft→0 = −t · ϕ−1(Vt), (18)
+Ft→1 = (1− t) · ϕ−1(Vt). (19)
+In this context, ϕ−1 represents the scaling operation that extends the value range from [0, 1] to R
+using an instance-specific scaling factor. This reverse flow normalization operation is identical to the
+one used in IFE [13].
+7.2 Network Architecture
+GIMM module. The architectural details of the networks used in GIMM are shown in Fig. 6. The
+Motion Encoder and Latent Refiner use a similar convolutional network architecture with residual
+units. Each Residual Unit consists of two convolutional layers with a skip connection. The major
+differences between them are the number of channels and residual units. On the other hand, the
+coordinate-based network gθ is designed as a five-layer SIREN [48], incorporating the motion latent
+Lt as an auxiliary input.
+Frame synthesis module. Adapted from AMT-G [29], the framework of the Frame synthesis module
+is illustrated in Fig. 7. This module integrates two unique decoding stages: an adapted initial decoder
+and a revised final decoder, while the rest of the module’s architecture remains unchanged from
+AMT-G. The architectural specifics of these modified decoders are shown in Fig. 8.
+7.3 Implementation Details
+In addition to experiments in the main text, we present more detailed implementations of GIMM and
+GIMM-VFI in this section.
+GIMM training. We begin by extracting optical flows from the training split of the Vimeo90K
+triplets dataset [54] using Flowformer [19]. With these extracted flows, we train GIMM, randomly
+cropping the flows to a resolution of 256 × 256. For each batch during training, we randomly select a
+timestep t from the set {0, 0.5, 1} to supervise. We set the batch size to 64, and train the model for
+240 epochs with a learning rate of 1 × 10−4, using 2 NVIDIA V100 GPUs.
+GIMM-VFI training. We integrate the pre-trained GIMM module and flow estimator into the
+GIMM-VFI model for end-to-end training on the arbitrary-timestep interpolation task. We implement
+14
+
+Conv 3x3 (16)
+Conv 3x3 (32)
+Res. Unit (32)
+Conv 3x3 (16)
+Res. Unit (32)
+Res. Unit (32)
+Motion Encoder
+Linear (35, 128)
+Sin
+Linear (128, 128)
+Sin
+Linear (128, 128)
+Sin
+Linear (128, 128)
+Sin
+Linear (128, 2)
+Coodinate-based Network
+Conv 3x3 (32)
+Conv 3x3 (64)
+Res. Unit (64)
+Conv 3x3 (32)
+Latent Refiner
+Figure 6: Details of the network architectures within the GIMM Module. The numbers in parentheses
+denote the output channel count for convolutional layers or the dimensionality shift from input to
+output for linear layers.
+AMT
+Bidirectional 
+Correlation Volume
+AMT
+Update Block
+AMT
+Multi-field
+Refinement
+Initial
+Decoder
+Final
+Decoder
+Figure 7: Overview of the frame synthesis module. The frame synthesis module conducts multi-
+scale flow refinements and predicts warping masks for interpolation, including the intermediate
+warping mask M′
+t predicted by the initial decoder. It integrates the images and their pyramid
+features Al
+0, Al
+1|l ∈ 1, 2 during decoding, updating predictions with correlation information from the
+Bidirectional Correlation V olume, which is constructed with correlation features(C0, C1). Ultimately,
+we use the outputs from the Final Decoder to perform the final interpolation of It through the
+Multi-field Refinement block. This block is adapted from AMT-G [29]. Modified components are
+highlighted in green for clarity.
+two variants of GIMM-VFI, using two different flow estimators: the RAFT [50] and FlowFormer [19],
+designated as GIMM-VFI-R and GIMM-VFI-F, respectively. However, both versions of GIMM-VFI
+share the same training process. Similar to previous works [ 55, 20], we train our model on the
+complete Vimeo90K septuplet split [54] for 60 epochs with a batch size of 32 and a learning rate of
+8 × 10−5. We randomly select triple subsets for training from each septuplet, following the same
+sampling strategy as previous research [ 55, 20]. We resize and randomly crop each frame into a
+resolution of 224 × 224 and perform a series of augmentations including rotation, flipping, temporal
+order reversing and channel order reversing. We train our model on 8 NVIDIA V100 GPUs.
+7.4 Training hyperparameters
+In addition to the implementation details in Sec. 7.3, we summarize the training settings for both
+GIMM and GIMM-VFI in Tab. 5.
+15
+
+Conv 5x5 (64)
+Conv 3x3 (64)
+PixelShuffle(2)
+Conv 3x3 (128)
+Deeper
+IFRBlock (128+5)
+Conv 5x5 (32)
+Conv 3x3 (32)
+PixelShuffle(2)
+Conv 3x3 (64)
+Deeper
+IFRBlock (8N)
+Multi-fields Flow
+&
+Residuals
+PixelShuffle(2)
+Initial Decoder Final Decoder
+Conv 1x1 (128)
+BatchNorm
+ReLU
+Conv 1x1 (64)
+BatchNorm
+ReLU
+Figure 8: The network architectures of the modified decoders within the frame synthesis module.
+Unless specifically noted, each convolutional layer is activated by a PReLU function. The Deeper
+IFRBlock (highlighted in red) is based on the decoder architecture (IFRBlock) introduced in IFR-
+Net [26]. In particular, we enhance the original IFRBlock by adding two additional residual blocks to
+create the Deeper IFRBlock.
+Table 5: Training settings for GIMM and GIMM-VFI.
+Configuration GIMM GIMM-VFI
+Optimizer AdamW
+Peak learning rate 1e-4 8e-5
+Minimum learning rate 1e-4 8e-6
+Epochs 240 60
+Batch size per GPU 16 4
+Weight decay 0 4e-5
+Optimizer momentum β1, β2 =0.9, 0.999
+Learning rate schedule ✗ Cosine annealing
+Warmip epochs 0 1
+Training Resolution 256×256 224 ×224
+Num. V100 GPUs 2 8
+7.5 Qualitative Results of GIMM Motion Modeling
+We present additional qualitative results of GIMM motion modeling in Figure 9. The visualization
+showcases the modeled motion of GIMM and variants in the ablation study. Our observation confirms
+the effectiveness of GIMM’s design and is consistent with the results from the ablation study in the
+main text. For example, the head motion in Figure 9 significantly deteriorates with noises across all
+timesteps when forward warping is replaced or latent refinement is skipped.
+7.6 Integration with other flow-based VFI methods
+Our method GIMM focuses on continuous motion modeling, which further enables frame inter-
+polation at arbitrary timesteps. We additionally integrate GIMM with other existing flow-based
+VFI approaches ( e.g., TTVFI [ 31], IFRNet [ 26]), by supplying accurately modeled motion. For
+evaluations, we calculate PSNRs on arbitrary-timestep interpolation benchmark SNU-FILM-arb in
+Table 6. We observed that integrating the GIMM module resulted in significant improvements. This
+further demonstrates the effectiveness of GIMM for continuous motion modeling when integrated
+with existing flow-based VFI works.
+7.7 Perception-oriented interpolation
+Our proposed method can be further enhanced for perception-oriented interpolation by incorporating
+an additional learning objective, specifically the LPIPS [56] loss. The perceptually enhanced GIMM-
+VFI variants are denoted as GIMM-VFI-R-P and GIMM-VFI-F-P respectively. For evaluation, we
+compute the LPIPS and FID indicators on the same benchmarks as those used in Section 4.4 of the
+main paper.
+16
+
+Overlaid Input Image Overlaid Input Flows
+Non-Fwarp Non-Imp Non-Refiner T-coord only Full Ground Truth
+Figure 9: Visual comparisons for 6X motion modeling on the Vimeo-septuplet-flow. We compare
+GIMM with its model variants mentioned in the ablation study of the main text.
+Table 6: Integrating GIMM with TTVFI and IFRNet.
+Motion method SNU-FILM-arb-Medium SNU-FILM-arb-Hard SNU-FILM-arb-Extreme
+PSNR↑ PSNR↑ PSNR↑
+TTVFI 34.48 30.39 26.24
+TTVFI+GIMM 35.55 (+1.07dB) 31.60 (+1.21dB) 27.40 (+1.16dB)
+IFRNet 34.88 31.15 26.32
+IFRNet+GIMM 36.46 (+1.58dB) 32.20 (+1.05dB) 27.73 (+1.41dB)
+Table 7: Quantitative improvements for perception-oriented arbitrary-timestep interpolation.
+We report the perceptual indicators as LPIPS↓/ FID↓, with the best results highlighted in boldface
+and the second best results in underline.
+Method XTest SNU-FILM-arb
+2K 4K Medium (4X) Hard (8X) Extreme (16X)
+GIMM-VFI-R 0.113 / 6.52 0.149 / 6.49 0.033 / 5.89 0.060 / 9.59 0.110 / 16.45
+GIMM-VFI-F 0.103 / 6.74 0.142 / 6.58 0.031 / 5.86 0.059 / 9.95 0.109 / 16.79
+GIMM-VFI-R-P 0.047 / 4.62 0.099 / 4.74 0.016 / 3.81 0.030 / 4.93 0.059 / 7.30
+GIMM-VFI-F-P 0.047 / 4.42 0.098 / 4.57 0.017 / 3.76 0.030 / 4.93 0.058 / 7.40
+Results. We present enhanced performance as measured by perceptual metrics in Table 7. The
+enhanced variants, GIMM-VFI-R-P and GIMM-VFI-F-P, demonstrate significant performance im-
+provements, particularly on the Extreme (16X) subset of the SNU-FILM-arb dataset, where LPIPS
+and FID scores decrease by approximately 0.05 and 9, respectively. These results underscore the
+effectiveness of our enhancement strategy and highlight the substantial potential of the GIMM module
+in delivering accurate motion modeling for arbitrary-timestep interpolation.
+17
+
+7.8 Broader Impacts
+Our proposed method, GIMM-VFI, demonstrates strong performance in continuous frame interpo-
+lation, with applications spanning real-world scenarios such as creating cinematic special effects
+and producing slow-motion videos. This technique not only enhances these use cases but also opens
+doors for further research in video technology. At its core, GIMM-VFI employs the GIMM module
+for continuous motion modeling in video frame interpolation, a feature that could also be adapted for
+related tasks like video compression and predictive video analysis. Despite its strengths, our approach
+shares limitations with other frame interpolation methods and, in some cases, may introduce artifacts
+that could pollute visual data on the Internet.
+18
+
